@@ -300,8 +300,11 @@ class TotalingSensor(PumpspyEntity, SensorEntity):
     def native_value(self) -> StateType | date | datetime | Decimal:
         if not self.has_live_data:
             return self.restored_value()
+        interval_data = self.coordinator.data.get(self._motor, {})
+        if self._interval_converted not in interval_data:
+            return None
         try:
-            data = self.coordinator.data[self._motor][self._interval_converted][0]
+            data = interval_data[self._interval_converted][0]
             data_type = "total_count" if self._type == CONF_CYCLES else self._type
             if data["year_num"] != datetime.now().year:
                 return 0

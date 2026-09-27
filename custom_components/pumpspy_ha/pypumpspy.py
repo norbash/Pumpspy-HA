@@ -34,8 +34,10 @@ device_types = {
     },
     3: {"endpoint": "bbs", "interval_endpoint": "bbs", "has_backup": True},
     4: {
+        # Smart Outlet 2.0: current data lives under rht_outlets, but the
+        # rht_outlet_cycles endpoint 404s; its cycles are under pump_outlet_cycles.
         "endpoint": "rht_outlets",
-        "interval_endpoint": "rht_outlet",
+        "interval_endpoint": "pump_outlet",
         "has_backup": False,
     },
     5: {
@@ -264,13 +266,23 @@ class Pumpspy:
                         raise PumpSpyDataError("PumpSpy returned no current data")
 
                     for interval in intervals:
-                        data["ac"][interval] = await self.fetch_interval_data(
-                            session=session, motor="ac", interval=interval
-                        )
-                        if self.has_backup() is True:
-                            data["dc"][interval] = await self.fetch_interval_data(
-                                session=session, motor="dc", interval=interval
-                            )
+                        motors = ["ac", "dc"] if self.has_backup() is True else ["ac"]
+                        for motor in motors:
+                            try:
+                                data[motor][interval] = await self.fetch_interval_data(
+                                    session=session, motor=motor, interval=interval
+                                )
+                            except InvalidAccessToken:
+                                raise
+                            except PumpSpyError as err:
+                                # Cycle history is optional; keep the current data
+                                # (alerts, connectivity) rather than failing the update.
+                                LOG.warning(
+                                    "PumpSpy %s %s cycle data unavailable: %s",
+                                    motor,
+                                    interval,
+                                    err,
+                                )
                     LOG.debug(data)
                     return data
                 except InvalidAccessToken:

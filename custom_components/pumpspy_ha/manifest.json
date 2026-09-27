@@ -2,8 +2,8 @@
   "domain": "pumpspy_ha",
   "name": "Pumpspy-HA",
   "config_flow": true,
-  "documentation": "https://github.com/digitalvir/Pumpspy-HA",
-  "issue_tracker": "https://github.com/digitalvir/Pumpspy-HA/issues",
+  "documentation": "https://github.com/norbash/Pumpspy-HA",
+  "issue_tracker": "https://github.com/norbash/Pumpspy-HA/issues",
   "requirements": ["aiohttp>=3.8.1"],
   "ssdp": [],
   "zeroconf": [],
@@ -13,5 +13,5 @@
     "@digitalvir"
   ],
   "iot_class": "cloud_polling",
-  "version": "2026.5.20.2"
+  "version": "2026.9.27"
 }
