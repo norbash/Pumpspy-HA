@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 import aiohttp
@@ -22,6 +23,8 @@ DEVICEINFO_URL = "devices/deviceid"
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8, sock_connect=8, sock_read=12)
 MAX_ATTEMPTS = 2
+# Individual cycles are kept for this long; sensors report counts within it.
+RECENT_CYCLE_WINDOW_MS = 3 * 60 * 60 * 1000
 RETRY_SLEEP_SECONDS = 1
 
 LOG = logging.getLogger(__name__)
@@ -86,6 +89,8 @@ class Pumpspy:
         self.access_token = None
         self.uid = None
         self.lid = None
+        self._recent_cycles: list[dict[str, int]] | None = None
+        self._recent_cycles_count = None
 
     async def setup(self) -> None:
         """Set up the class with access token and user id."""
@@ -264,6 +269,9 @@ class Pumpspy:
                     data["current"] = await self.fetch_current_data(session=session)
                     if not data["current"]:
                         raise PumpSpyDataError("PumpSpy returned no current data")
+                    data["recent_cycles"] = await self.fetch_recent_cycles(
+                        session=session, current=data["current"]
+                    )
 
                     for interval in intervals:
                         motors = ["ac", "dc"] if self.has_backup() is True else ["ac"]
@@ -326,6 +334,48 @@ class Pumpspy:
             updated_url,
             headers=self.authed_headers(),
         )
+
+    async def fetch_recent_cycles(self, session: aiohttp.ClientSession, current):
+        """Return individual main-pump cycles from the last few hours, newest first.
+
+        PumpSpy only serves the device's entire cycle history (any interval other
+        than day/week/month), which grows with every cycle. Re-download it only
+        when today's cycle count has changed since the last download.
+        """
+        try:
+            count = current[0].get("cyclestoday")
+        except (IndexError, KeyError, TypeError, AttributeError):
+            count = None
+        if self._recent_cycles is not None and count == self._recent_cycles_count:
+            return self._recent_cycles
+
+        endpoint = self.device_type()["interval_endpoint"]
+        url = f"{BASE_URL}/{endpoint}_cycles/deviceid/{self.device_id}/interval/raw"
+        LOG.debug("Querying PumpSpy API: %s", url)
+        try:
+            records = await self._request_json(
+                session, "GET", url, headers=self.authed_headers()
+            )
+        except InvalidAccessToken:
+            raise
+        except PumpSpyError as err:
+            # Recent-cycle detail is optional, like interval history.
+            LOG.warning("PumpSpy recent cycle data unavailable: %s", err)
+            return self._recent_cycles
+
+        cutoff = int(time.time() * 1000) - RECENT_CYCLE_WINDOW_MS
+        recent = sorted(
+            (
+                {"time": r["utcunixTime"], "duration": r.get("cycleDuration") or 0}
+                for r in records or []
+                if isinstance(r, dict) and (r.get("utcunixTime") or 0) >= cutoff
+            ),
+            key=lambda c: c["time"],
+            reverse=True,
+        )
+        self._recent_cycles = recent
+        self._recent_cycles_count = count
+        return recent
 
     def authed_headers(self):
         """Return headers with bearer token."""

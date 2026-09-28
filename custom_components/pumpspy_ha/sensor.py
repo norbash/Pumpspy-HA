@@ -48,6 +48,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         LastSuccessfulUpdateSensor(coordinator=coordinator),
         DataAgeMinutesSensor(coordinator=coordinator),
         LastErrorSensor(coordinator=coordinator),
+        RecentCyclesSensor(coordinator=coordinator, hours=1),
+        RecentCyclesSensor(coordinator=coordinator, hours=3),
+        LongestRecentCycleSensor(coordinator=coordinator),
     ]
 
     for interval in coordinator.intervals:
@@ -375,3 +378,71 @@ class LastCycleSensor(PumpspyEntity, SensorEntity):
                 )
             }
         )
+
+
+class RecentCycleEntity(PumpspyEntity):
+    """Base for sensors built from individual recent main-pump cycles."""
+
+    def recent_cycles(self, hours: float) -> list[dict[str, int]] | None:
+        """Cycles that started within the last `hours`, or None if unknown."""
+        cycles = (self.coordinator.data or {}).get("recent_cycles")
+        if cycles is None:
+            return None
+        cutoff = (dt.utcnow().timestamp() - hours * 3600) * 1000
+        return [c for c in cycles if c["time"] >= cutoff]
+
+
+class RecentCyclesSensor(RecentCycleEntity, SensorEntity):
+    """Number of main-pump cycles in a trailing window."""
+
+    def __init__(self, coordinator, hours: int) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator=coordinator)
+        self._hours = hours
+        self._attr_native_unit_of_measurement = "cycles"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:pump"
+
+        device_info = self.coordinator.api.get_device_info()
+        window = "Hour" if hours == 1 else f"{hours} Hours"
+        self._attr_unique_id = f"{device_info[CONF_DEVICEID]}_main_cycles_last_{hours}h"
+        self._attr_name = f"{device_info[CONF_DEVICE_NAME]} Cycles Last {window}"
+
+    @property
+    def native_value(self) -> StateType | date | datetime | Decimal:
+        if not self.has_live_data:
+            return self.restored_value()
+        cycles = self.recent_cycles(self._hours)
+        return None if cycles is None else len(cycles)
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        return self.attributes_with_diagnostics()
+
+
+class LongestRecentCycleSensor(RecentCycleEntity, SensorEntity):
+    """Longest main-pump cycle in the last hour; 0 when the pump has not run."""
+
+    def __init__(self, coordinator) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator=coordinator)
+        self._attr_native_unit_of_measurement = "s"
+        self._attr_device_class = SensorDeviceClass.DURATION
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+        device_info = self.coordinator.api.get_device_info()
+        self._attr_unique_id = f"{device_info[CONF_DEVICEID]}_main_longest_cycle_last_1h"
+        self._attr_name = f"{device_info[CONF_DEVICE_NAME]} Longest Cycle Last Hour"
+
+    @property
+    def native_value(self) -> StateType | date | datetime | Decimal:
+        if not self.has_live_data:
+            return self.restored_value()
+        cycles = self.recent_cycles(1)
+        if cycles is None:
+            return None
+        return round(max((c["duration"] for c in cycles), default=0) / 1000, 1)
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        return self.attributes_with_diagnostics()
